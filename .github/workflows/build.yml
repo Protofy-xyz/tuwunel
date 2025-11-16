@@ -7,8 +7,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build for all platforms
+
+  # ========================
+  # Linux (x86_64, ARM64, ARMv7) with cross
+  # ========================
+  linux-build:
+    name: Linux build
     runs-on: ubuntu-latest
 
     strategy:
@@ -17,51 +21,118 @@ jobs:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
           - armv7-unknown-linux-gnueabihf
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
-          - x86_64-pc-windows-msvc
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --locked --git https://github.com/cross-rs/cross
 
       - name: Build
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Package artifact
+      - name: Package
         run: |
-          mkdir artifact
-          cp target/${{ matrix.target }}/release/tuwunel artifact/ || cp target/${{ matrix.target }}/release/tuwunel.exe artifact/
+          mkdir -p artifact
+          cp target/${{ matrix.target }}/release/tuwunel artifact/
           cd artifact
-          zip tuwunel-${{ matrix.target }}.zip * 
+          tar -czf tuwunel-${{ matrix.target }}.tar.gz *
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: tuwunel-${{ matrix.target }}
-          path: artifact/tuwunel-${{ matrix.target }}.zip
+          path: artifact/tuwunel-${{ matrix.target }}.tar.gz
 
+
+  # ========================
+  # macOS (no cross, only rustc)
+  # ========================
+  macos-build:
+    name: macOS build
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        target:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build (native)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp target/${{ matrix.target }}/release/tuwunel artifact/
+          cd artifact
+          tar -czf tuwunel-${{ matrix.target }}.tar.gz *
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tuwunel-${{ matrix.target }}
+          path: artifact/tuwunel-${{ matrix.target }}.tar.gz
+
+
+  # ========================
+  # Windows (native)
+  # ========================
+  windows-build:
+    name: Windows build
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          mkdir artifact
+          Copy-Item "target\${{ matrix.target }}\release\tuwunel.exe" artifact\
+          Compress-Archive artifact\* "tuwunel-${{ matrix.target }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tuwunel-${{ matrix.target }}
+          path: tuwunel-${{ matrix.target }}.zip
+
+
+  # ========================
+  # Release job
+  # ========================
   release:
     name: Publish Release
-    needs: build
+    needs: [linux-build, macos-build, windows-build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: artifacts/**/* 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
